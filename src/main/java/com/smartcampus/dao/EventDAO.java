@@ -22,9 +22,7 @@ public class EventDAO {
                        event_date,
                        start_time,
                        end_time,
-                       organizer_id,
-                       organizing_department,
-                       organized_by
+                       organizer_id
                 FROM events
                 ORDER BY event_date, start_time
                 """;
@@ -43,12 +41,6 @@ public class EventDAO {
                         resultSet.getTime("end_time").toLocalTime(),
                         resultSet.getInt("organizer_id")
                 );
-
-                event.setOrganizingDepartment(
-                        resultSet.getString("organizing_department"));
-                event.setOrganizedBy(
-                        resultSet.getString("organized_by"));
-
                 events.add(event);
             }
 
@@ -69,11 +61,9 @@ public class EventDAO {
                     event_date,
                     start_time,
                     end_time,
-                    organizer_id,
-                    organizing_department,
-                    organized_by
+                    organizer_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """;
 
         try (Connection connection = DBConnection.getConnection();
@@ -86,9 +76,6 @@ public class EventDAO {
             statement.setTime(4, java.sql.Time.valueOf(event.getStartTime()));
             statement.setTime(5, java.sql.Time.valueOf(event.getEndTime()));
             statement.setInt(6, event.getOrganizerId());
-            statement.setString(7, event.getOrganizingDepartment());
-            statement.setString(8, event.getOrganizedBy());
-
             int affected = statement.executeUpdate();
             if (affected == 0) return -1;
 
@@ -115,11 +102,9 @@ public class EventDAO {
                     event_date,
                     start_time,
                     end_time,
-                    organizer_id,
-                    organizing_department,
-                    organized_by
+                    organizer_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """;
 
         try (Connection connection = DBConnection.getConnection();
@@ -131,9 +116,6 @@ public class EventDAO {
             statement.setTime(4, java.sql.Time.valueOf(event.getStartTime()));
             statement.setTime(5, java.sql.Time.valueOf(event.getEndTime()));
             statement.setInt(6, event.getOrganizerId());
-            statement.setString(7, event.getOrganizingDepartment());
-            statement.setString(8, event.getOrganizedBy());
-
             return statement.executeUpdate() > 0;
 
         } catch (Exception e) {
@@ -152,10 +134,18 @@ public class EventDAO {
                     event_date = ?,
                     start_time = ?,
                     end_time = ?,
-                    organizer_id = ?,
-                    organizing_department = ?,
-                    organized_by = ?
+                    organizer_id = ?
                 WHERE event_id = ?
+                  AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM bookings WHERE event_id = ?
+                        )
+                        OR (
+                            event_date = ?
+                            AND start_time = ?
+                            AND end_time = ?
+                        )
+                  )
                 """;
 
         try (Connection connection = DBConnection.getConnection();
@@ -167,9 +157,11 @@ public class EventDAO {
             statement.setTime(4, java.sql.Time.valueOf(event.getStartTime()));
             statement.setTime(5, java.sql.Time.valueOf(event.getEndTime()));
             statement.setInt(6, event.getOrganizerId());
-            statement.setString(7, event.getOrganizingDepartment());
-            statement.setString(8, event.getOrganizedBy());
-            statement.setInt(9, event.getEventId());
+            statement.setInt(7, event.getEventId());
+            statement.setInt(8, event.getEventId());
+            statement.setDate(9, java.sql.Date.valueOf(event.getEventDate()));
+            statement.setTime(10, java.sql.Time.valueOf(event.getStartTime()));
+            statement.setTime(11, java.sql.Time.valueOf(event.getEndTime()));
 
             return statement.executeUpdate() > 0;
 
@@ -182,12 +174,19 @@ public class EventDAO {
 
     // DELETE EVENT
     public boolean deleteEvent(int eventId) {
-        String sql = "DELETE FROM events WHERE event_id = ?";
+        String sql = """
+                DELETE FROM events
+                WHERE event_id = ?
+                  AND NOT EXISTS (
+                        SELECT 1 FROM bookings WHERE event_id = ?
+                  )
+                """;
 
         try (Connection connection = DBConnection.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
 
             statement.setInt(1, eventId);
+            statement.setInt(2, eventId);
             return statement.executeUpdate() > 0;
 
         } catch (Exception e) {

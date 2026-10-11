@@ -95,14 +95,26 @@ public class Main extends Application {
                         AdminDashboard adminDashboard =
                                 new AdminDashboard();
 
-                        adminDashboard.show(user, stage);
+                        adminDashboard.show(user, stage, () -> {
+                            emailField.clear();
+                            passwordField.clear();
+                            message.setText("");
+                            stage.setScene((Scene) stage.getUserData());
+                            stage.setTitle("Smart Campus - Login");
+                        });
 
                     } else if ("FACULTY".equalsIgnoreCase(role)) {
 
                         Dashboard dashboard =
                                 new Dashboard();
 
-                        dashboard.show(user, stage);
+                        dashboard.show(user, stage, () -> {
+                            emailField.clear();
+                            passwordField.clear();
+                            message.setText("");
+                            stage.setScene((Scene) stage.getUserData());
+                            stage.setTitle("Smart Campus - Login");
+                        });
 
                     } else {
                         message.setText(
@@ -154,6 +166,7 @@ public class Main extends Application {
                         400
                 );
 
+        stage.setUserData(scene);
         stage.setTitle(
                 "Smart Campus - Login"
         );

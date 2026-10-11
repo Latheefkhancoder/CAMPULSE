@@ -206,4 +206,26 @@ public class BookingService {
             return false;
         }
     }
+
+    public boolean updatePendingBookingDetails(
+            int bookingId,
+            int resourceId,
+            LocalDate bookingDate,
+            LocalTime startTime,
+            LocalTime endTime) {
+        if (bookingId <= 0
+                || resourceId <= 0
+                || bookingDate == null
+                || startTime == null
+                || endTime == null
+                || !endTime.isAfter(startTime)
+                || bookingDate.isBefore(LocalDate.now())
+                || (bookingDate.isEqual(LocalDate.now())
+                    && !startTime.isAfter(LocalTime.now()))) {
+            return false;
+        }
+
+        return bookingDAO.updatePendingBookingDetails(
+                bookingId, resourceId, bookingDate, startTime, endTime);
+    }
 }

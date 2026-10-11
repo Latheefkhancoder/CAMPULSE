@@ -216,6 +216,9 @@ public class ResourceDAO {
         String sql = """
                 DELETE FROM resources
                 WHERE resource_id = ?
+                  AND NOT EXISTS (
+                        SELECT 1 FROM bookings WHERE resource_id = ?
+                  )
                 """;
 
         try (
@@ -230,6 +233,7 @@ public class ResourceDAO {
                     1,
                     resourceId
             );
+            statement.setInt(2, resourceId);
 
             return statement.executeUpdate() > 0;
 

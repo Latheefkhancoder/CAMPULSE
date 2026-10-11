@@ -25,6 +25,12 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TableCell;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
+import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.GridPane;
@@ -33,12 +39,20 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import javafx.util.StringConverter;
 
+import java.time.format.DateTimeFormatter;
+
 public class Dashboard {
 
     private BorderPane mainLayout;
     private StackPane contentArea;
+    private Runnable logoutAction;
 
     public void show(User user, Stage stage) {
+        show(user, stage, stage::close);
+    }
+
+    public void show(User user, Stage stage, Runnable logoutAction) {
+        this.logoutAction = logoutAction;
         mainLayout = new BorderPane();
         mainLayout.setStyle("-fx-background-color: #f4f7fb;");
 
@@ -74,12 +88,14 @@ public class Dashboard {
         equipmentButton.setOnAction(e -> showPage(buildEquipmentPage()));
         logoutButton.setOnAction(e -> {
             Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+            confirm.initOwner(stage);
+            confirm.initModality(javafx.stage.Modality.WINDOW_MODAL);
             confirm.setTitle("Logout");
             confirm.setHeaderText("Log out of Smart Campus?");
             confirm.setContentText("You will return to the login screen the next time you launch the application.");
             confirm.showAndWait().ifPresent(response -> {
                 if (response == javafx.scene.control.ButtonType.OK) {
-                    stage.close();
+                    this.logoutAction.run();
                 }
             });
         });
@@ -247,25 +263,82 @@ public class Dashboard {
 
     private Node buildEventsPage() {
         VBox page = pageContainer("Campus Events", "Review scheduled campus events.");
-        StringBuilder data = new StringBuilder();
-        try {
-            var events = new EventDAO().getAllEvents();
-            if (events == null || events.isEmpty()) {
-                data.append("No events found.");
-            } else {
-                for (var item : events) {
-                    data.append(item.getEventName()).append('\n')
-                        .append("Date: ").append(item.getEventDate()).append('\n')
-                        .append("Time: ").append(item.getStartTime()).append(" - ").append(item.getEndTime()).append('\n')
-                        .append("Description: ").append(item.getDescription()).append("\n\n");
-                }
+        TableView<Event> table = new TableView<>();
+        table.setColumnResizePolicy(
+                TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        TableColumn<Event, Integer> idColumn =
+                new TableColumn<>("Event ID");
+        idColumn.setCellValueFactory(
+                new PropertyValueFactory<>("eventId"));
+        TableColumn<Event, String> nameColumn =
+                new TableColumn<>("Event Name");
+        nameColumn.setCellValueFactory(
+                new PropertyValueFactory<>("eventName"));
+        TableColumn<Event, String> descriptionColumn =
+                new TableColumn<>("Description");
+        descriptionColumn.setCellValueFactory(
+                new PropertyValueFactory<>("description"));
+        TableColumn<Event, java.time.LocalDate> dateColumn =
+                new TableColumn<>("Event Date");
+        dateColumn.setCellValueFactory(
+                new PropertyValueFactory<>("eventDate"));
+        dateColumn.setCellFactory(column -> new TableCell<>() {
+            private final DateTimeFormatter formatter =
+                    DateTimeFormatter.ofPattern("dd MMM yyyy");
+
+            @Override
+            protected void updateItem(
+                    java.time.LocalDate date, boolean empty) {
+                super.updateItem(date, empty);
+                setText(empty || date == null ? null : date.format(formatter));
             }
-        } catch (Exception ex) {
-            data.append("Could not load events. Please check the database connection.");
-            ex.printStackTrace();
-        }
-        page.getChildren().add(card("Event List", data.toString()));
+        });
+        TableColumn<Event, java.time.LocalTime> startColumn =
+                eventTimeColumn("Start Time", "startTime");
+        TableColumn<Event, java.time.LocalTime> endColumn =
+                eventTimeColumn("End Time", "endTime");
+        TableColumn<Event, Integer> organizerColumn =
+                new TableColumn<>("Organizer (User ID)");
+        organizerColumn.setCellValueFactory(
+                new PropertyValueFactory<>("organizerId"));
+        table.getColumns().add(idColumn);
+        table.getColumns().add(nameColumn);
+        table.getColumns().add(descriptionColumn);
+        table.getColumns().add(dateColumn);
+        table.getColumns().add(startColumn);
+        table.getColumns().add(endColumn);
+        table.getColumns().add(organizerColumn);
+
+        ObservableList<Event> events =
+                FXCollections.observableArrayList();
+        table.setItems(events);
+        Button refresh = new Button("Refresh");
+        refresh.setOnAction(event ->
+                events.setAll(new EventDAO().getAllEvents()));
+        page.getChildren().addAll(table, refresh);
+        VBox.setVgrow(table, javafx.scene.layout.Priority.ALWAYS);
+        table.setMinHeight(300);
+        refresh.fire();
         return wrapScrollable(page);
+    }
+
+    private TableColumn<Event, java.time.LocalTime> eventTimeColumn(
+            String title, String property) {
+        TableColumn<Event, java.time.LocalTime> column =
+                new TableColumn<>(title);
+        column.setCellValueFactory(new PropertyValueFactory<>(property));
+        column.setCellFactory(ignored -> new TableCell<>() {
+            private final DateTimeFormatter formatter =
+                    DateTimeFormatter.ofPattern("HH:mm");
+
+            @Override
+            protected void updateItem(
+                    java.time.LocalTime time, boolean empty) {
+                super.updateItem(time, empty);
+                setText(empty || time == null ? null : time.format(formatter));
+            }
+        });
+        return column;
     }
 
     private Node buildBookingsPage(User user) {
@@ -319,7 +392,11 @@ public class Dashboard {
         return wrapScrollable(page);
     }
 
-    private Node buildNewBookingPage(User user) {
+    Node buildNewBookingPage(User user) {
+        return buildNewBookingPage(user, () -> {});
+    }
+
+    Node buildNewBookingPage(User user, Runnable onBookingCreated) {
         VBox page = pageContainer(
                 "Create a Booking",
                 "Enter the event details, choose a venue and submit a request for admin approval."
@@ -503,6 +580,7 @@ public class Dashboard {
                     endMinute.getSelectionModel().clearSelection();
                     endAmPm.getSelectionModel().clearSelection();
                     descriptionArea.clear();
+                    onBookingCreated.run();
                 } else {
                     message.setStyle("-fx-text-fill: #b91c1c;");
                     switch (result) {

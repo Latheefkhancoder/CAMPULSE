@@ -384,6 +384,167 @@ public boolean updateBookingStatus(int bookingId, String status) {
     }
 }
 
+    public boolean updatePendingBookingDetails(
+            int bookingId,
+            int resourceId,
+            java.time.LocalDate bookingDate,
+            java.time.LocalTime startTime,
+            java.time.LocalTime endTime) {
+
+        if (bookingId <= 0
+                || resourceId <= 0
+                || bookingDate == null
+                || startTime == null
+                || endTime == null
+                || !endTime.isAfter(startTime)) {
+            return false;
+        }
+
+        String bookingSql = """
+                SELECT event_id, booking_status
+                FROM bookings
+                WHERE booking_id = ?
+                FOR UPDATE
+                """;
+        String resourceSql = """
+                SELECT availability_status
+                FROM resources
+                WHERE resource_id = ?
+                FOR UPDATE
+                """;
+        String conflictSql = """
+                SELECT COUNT(*)
+                FROM bookings
+                WHERE resource_id = ?
+                  AND booking_date = ?
+                  AND booking_id <> ?
+                  AND booking_status IN ('PENDING', 'APPROVED')
+                  AND start_time < ?
+                  AND end_time > ?
+                """;
+        String updateBookingSql = """
+                UPDATE bookings
+                SET resource_id = ?, booking_date = ?, start_time = ?, end_time = ?
+                WHERE booking_id = ? AND booking_status = 'PENDING'
+                """;
+        String updateEventSql = """
+                UPDATE events
+                SET event_date = ?, start_time = ?, end_time = ?
+                WHERE event_id = ?
+                """;
+
+        try (Connection connection = DBConnection.getConnection()) {
+            connection.setAutoCommit(false);
+
+            try {
+                int eventId;
+                try (PreparedStatement statement =
+                             connection.prepareStatement(bookingSql)) {
+                    statement.setInt(1, bookingId);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (!resultSet.next()
+                                || !"PENDING".equals(
+                                        resultSet.getString("booking_status"))) {
+                            connection.rollback();
+                            return false;
+                        }
+                        eventId = resultSet.getInt("event_id");
+                        if (resultSet.wasNull()) {
+                            eventId = 0;
+                        }
+                    }
+                }
+
+                try (PreparedStatement statement =
+                             connection.prepareStatement(resourceSql)) {
+                    statement.setInt(1, resourceId);
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (!resultSet.next()
+                                || !"AVAILABLE".equals(
+                                        resultSet.getString("availability_status"))) {
+                            connection.rollback();
+                            return false;
+                        }
+                    }
+                }
+
+                try (PreparedStatement statement =
+                             connection.prepareStatement(conflictSql)) {
+                    statement.setInt(1, resourceId);
+                    statement.setDate(
+                            2, java.sql.Date.valueOf(bookingDate));
+                    statement.setInt(3, bookingId);
+                    statement.setTime(4, java.sql.Time.valueOf(endTime));
+                    statement.setTime(5, java.sql.Time.valueOf(startTime));
+                    try (ResultSet resultSet = statement.executeQuery()) {
+                        if (resultSet.next() && resultSet.getInt(1) > 0) {
+                            connection.rollback();
+                            return false;
+                        }
+                    }
+                }
+
+                try (PreparedStatement statement =
+                             connection.prepareStatement(updateBookingSql)) {
+                    statement.setInt(1, resourceId);
+                    statement.setDate(
+                            2, java.sql.Date.valueOf(bookingDate));
+                    statement.setTime(3, java.sql.Time.valueOf(startTime));
+                    statement.setTime(4, java.sql.Time.valueOf(endTime));
+                    statement.setInt(5, bookingId);
+                    if (statement.executeUpdate() == 0) {
+                        connection.rollback();
+                        return false;
+                    }
+                }
+
+                if (eventId > 0) {
+                    try (PreparedStatement statement =
+                                 connection.prepareStatement(updateEventSql)) {
+                        statement.setDate(
+                                1, java.sql.Date.valueOf(bookingDate));
+                        statement.setTime(2, java.sql.Time.valueOf(startTime));
+                        statement.setTime(3, java.sql.Time.valueOf(endTime));
+                        statement.setInt(4, eventId);
+                        statement.executeUpdate();
+                    }
+                }
+
+                connection.commit();
+                return true;
+            } catch (Exception e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    public boolean deleteBooking(int bookingId) {
+        if (bookingId <= 0) {
+            return false;
+        }
+
+        String sql = """
+                DELETE FROM bookings
+                WHERE booking_id = ?
+                  AND booking_status IN ('REJECTED', 'CANCELLED')
+                """;
+
+        try (Connection connection = DBConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, bookingId);
+            return statement.executeUpdate() > 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
     // Cancel a user's own pending or approved booking
     public boolean cancelBooking(int bookingId, int userId) {
 

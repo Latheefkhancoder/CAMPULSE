@@ -17,6 +17,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
@@ -26,23 +27,39 @@ import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.Node;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Region;
+import javafx.scene.control.TableCell;
 import javafx.stage.Stage;
+import javafx.stage.Modality;
+import javafx.util.StringConverter;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 public class AdminDashboard {
 
     private javafx.scene.layout.BorderPane mainLayout;
     private javafx.scene.layout.StackPane contentArea;
     private User currentUser;
+    private Stage primaryStage;
+    private Runnable logoutAction;
 
     public void show(User user, Stage stage) {
+        show(user, stage, stage::close);
+    }
+
+    public void show(User user, Stage stage, Runnable logoutAction) {
         this.currentUser = user;
+        this.primaryStage = stage;
+        this.logoutAction = logoutAction;
 
         mainLayout = new javafx.scene.layout.BorderPane();
         mainLayout.setStyle("-fx-background-color: #f4f7fb;");
@@ -69,16 +86,8 @@ public class AdminDashboard {
         Button equipmentButton = navigationButton("Manage Equipment");
 
         dashboardButton.setOnAction(e -> showAdminHome(user));
-        resourcesButton.setOnAction(e -> showManagementPage(
-                "Manage Resources", "Manage campus rooms, halls and other bookable resources.",
-                new String[]{"Add Resource", "Edit Resource", "Delete Resource", "View Resources"},
-                new Runnable[]{this::showAddResourceWindow, this::showEditResourceWindow,
-                        this::showDeleteResourceWindow, this::showResources}));
-        eventsButton.setOnAction(e -> showManagementPage(
-                "Manage Events", "Create, update and review campus events.",
-                new String[]{"Add Event", "Edit Event", "Delete Event", "View Events"},
-                new Runnable[]{this::showAddEventWindow, this::showEditEventWindow,
-                        this::showDeleteEventWindow, this::showEvents}));
+        resourcesButton.setOnAction(e -> showResources());
+        eventsButton.setOnAction(e -> showEvents());
         bookingsButton.setOnAction(e -> showBookingManagement());
         equipmentButton.setOnAction(e -> showManagementPage(
                 "Manage Equipment", "Maintain campus equipment inventory and condition.",
@@ -90,7 +99,7 @@ public class AdminDashboard {
         VBox.setVgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
         Button logoutButton = navigationButton("Logout");
         logoutButton.setStyle("-fx-background-color: #7f2935; -fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold; -fx-background-radius: 8; -fx-padding: 12; -fx-alignment: CENTER_LEFT;");
-        logoutButton.setOnAction(e -> stage.close());
+        logoutButton.setOnAction(e -> this.logoutAction.run());
 
         sidebar.getChildren().addAll(
                 brand, subtitle, new javafx.scene.control.Separator(),
@@ -217,11 +226,8 @@ public class AdminDashboard {
 
         HBox quickActions = new HBox(16,
                 actionCard("Review bookings", "Approve or reject faculty booking requests.", "Open booking management", () -> showBookingManagement()),
-                actionCard("Manage resources", "Add, update, view or remove campus venues.", "Open resource tools", () -> showManagementPage(
-                    "Manage Resources", "Manage campus rooms, halls and other bookable resources.",
-                    new String[]{"Add Resource", "Edit Resource", "Delete Resource", "View Resources"},
-                    new Runnable[]{this::showAddResourceWindow, this::showEditResourceWindow,
-                            this::showDeleteResourceWindow, this::showResources})),
+                actionCard("Manage resources", "Add, update, view or remove campus venues.",
+                        "Open resource tools", this::showResources),
                 actionCard("Manage events", "Maintain campus event information.", "Open event tools", () -> showEventManagement())
         );
         quickActions.setAlignment(Pos.CENTER_LEFT);
@@ -369,10 +375,15 @@ table.setColumnResizePolicy(
         Button refreshButton = new Button("Refresh");
         refreshButton.setOnAction(event -> refreshTable.run());
 
+        Button createButton = new Button("Create Booking");
+        createButton.setOnAction(event -> showCreateBookingForm());
+
         Button approveButton = new Button("Approve");
         Button rejectButton = new Button("Reject");
         Button cancelButton = new Button("Cancel Booking");
         Button completeButton = new Button("Complete");
+        Button editButton = new Button("Update Details");
+        Button deleteButton = new Button("Delete Booking");
         Button closeButton = new Button("Close");
 
         java.util.function.Consumer<String> updateSelectedBooking = requestedStatus -> {
@@ -432,16 +443,24 @@ table.setColumnResizePolicy(
                 updateSelectedBooking.accept("CANCELLED"));
         completeButton.setOnAction(event ->
                 updateSelectedBooking.accept("COMPLETED"));
+        editButton.setOnAction(event ->
+                showUpdateBookingDialog(
+                        table.getSelectionModel().getSelectedItem(),
+                        refreshTable));
+        deleteButton.setOnAction(event ->
+                deleteSelectedBooking(
+                        table.getSelectionModel().getSelectedItem(),
+                        refreshTable));
         closeButton.setText("Back to Dashboard");
         closeButton.setOnAction(event -> showAdminHome(currentUser));
 
         HBox filterRow = new HBox(10,
-                new Label("Status:"), statusFilter, refreshButton);
+                new Label("Status:"), statusFilter, refreshButton, createButton);
         filterRow.setAlignment(Pos.CENTER_LEFT);
 
         HBox actionRow = new HBox(10,
                 approveButton, rejectButton, cancelButton,
-                completeButton, closeButton);
+                completeButton, editButton, deleteButton, closeButton);
         actionRow.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(15, heading, filterRow, table, actionRow);
@@ -451,6 +470,161 @@ table.setColumnResizePolicy(
         table.setMinHeight(300);
         contentArea.getChildren().setAll(root);
         refreshTable.run();
+    }
+
+    private void showCreateBookingForm() {
+        Button backButton = new Button("Back to Bookings");
+        backButton.setOnAction(event -> showBookingManagement());
+
+        Node bookingForm = new Dashboard().buildNewBookingPage(
+                currentUser, this::showBookingManagement);
+        VBox page = new VBox(12, backButton, bookingForm);
+        VBox.setVgrow(bookingForm, Priority.ALWAYS);
+        contentArea.getChildren().setAll(page);
+    }
+
+    private void showUpdateBookingDialog(
+            Booking booking, Runnable refreshTable) {
+        if (booking == null) {
+            showMessage("Please select a booking from the table first.");
+            return;
+        }
+        if (!"PENDING".equalsIgnoreCase(booking.getBookingStatus())) {
+            showMessage("Only pending bookings can be updated.");
+            return;
+        }
+
+        var availableResources = new ResourceDAO().getAllResources().stream()
+                .filter(resource ->
+                        "AVAILABLE".equalsIgnoreCase(
+                                resource.getAvailabilityStatus()))
+                .toList();
+        if (availableResources.isEmpty()) {
+            showMessage("No available resources can be assigned to this booking.");
+            return;
+        }
+
+        ComboBox<Resource> resourceBox = new ComboBox<>(
+                FXCollections.observableArrayList(availableResources));
+        resourceBox.setMaxWidth(Double.MAX_VALUE);
+        resourceBox.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Resource resource) {
+                return resource == null
+                        ? ""
+                        : resource.getResourceName() + " — "
+                                + resource.getLocation();
+            }
+
+            @Override
+            public Resource fromString(String value) {
+                return null;
+            }
+        });
+        resourceBox.getItems().stream()
+                .filter(resource ->
+                        resource.getResourceId() == booking.getResourceId())
+                .findFirst()
+                .ifPresentOrElse(
+                        resourceBox::setValue,
+                        () -> resourceBox.getSelectionModel().selectFirst());
+
+        DatePicker datePicker = new DatePicker(booking.getBookingDate());
+        TextField startTimeField = new TextField(
+                booking.getStartTime().toString());
+        startTimeField.setPromptText("HH:mm");
+        TextField endTimeField = new TextField(
+                booking.getEndTime().toString());
+        endTimeField.setPromptText("HH:mm");
+
+        GridPane fields = new GridPane();
+        fields.setHgap(12);
+        fields.setVgap(12);
+        fields.addRow(0, new Label("Resource"), resourceBox);
+        fields.addRow(1, new Label("Date"), datePicker);
+        fields.addRow(2, new Label("Start time (24-hour HH:mm)"), startTimeField);
+        fields.addRow(3, new Label("End time (24-hour HH:mm)"), endTimeField);
+        GridPane.setHgrow(resourceBox, Priority.ALWAYS);
+        GridPane.setHgrow(datePicker, Priority.ALWAYS);
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Update Pending Booking");
+        dialog.setHeaderText(
+                "Change the resource or schedule. The linked event schedule will also be updated.");
+        dialog.getDialogPane().setContent(fields);
+        dialog.getDialogPane().getButtonTypes().addAll(
+                ButtonType.OK, ButtonType.CANCEL);
+
+        if (dialog.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+
+        try {
+            Resource resource = resourceBox.getValue();
+            LocalDate date = datePicker.getValue();
+            LocalTime startTime = LocalTime.parse(
+                    startTimeField.getText().trim());
+            LocalTime endTime = LocalTime.parse(
+                    endTimeField.getText().trim());
+            if (resource == null || date == null) {
+                showMessage("Please select a resource and date.");
+                return;
+            }
+
+            boolean success = new com.smartcampus.service.BookingService()
+                    .updatePendingBookingDetails(
+                            booking.getBookingId(),
+                            resource.getResourceId(),
+                            date,
+                            startTime,
+                            endTime);
+            if (success) {
+                showMessage("Booking #" + booking.getBookingId()
+                        + " details updated.");
+                refreshTable.run();
+            } else {
+                showMessage("Booking details could not be updated. The booking "
+                        + "must still be pending, and the resource and time "
+                        + "must be available and conflict-free.");
+            }
+        } catch (DateTimeParseException e) {
+            showMessage("Enter start and end times in 24-hour HH:mm format.");
+        }
+    }
+
+    private void deleteSelectedBooking(
+            Booking booking, Runnable refreshTable) {
+        if (booking == null) {
+            showMessage("Please select a booking from the table first.");
+            return;
+        }
+        if (!"REJECTED".equalsIgnoreCase(booking.getBookingStatus())
+                && !"CANCELLED".equalsIgnoreCase(
+                        booking.getBookingStatus())) {
+            showMessage("Only rejected or cancelled bookings can be deleted. "
+                    + "Pending, approved, and completed bookings are retained.");
+            return;
+        }
+
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.setTitle("Delete Booking");
+        confirmation.setHeaderText(
+                "Delete booking #" + booking.getBookingId() + "?");
+        confirmation.setContentText(
+                "Only this rejected/cancelled booking record will be removed; "
+                        + "its linked event will remain.");
+        if (confirmation.showAndWait().filter(
+                ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+
+        if (new BookingDAO().deleteBooking(booking.getBookingId())) {
+            showMessage("Booking #" + booking.getBookingId() + " deleted.");
+            refreshTable.run();
+        } else {
+            showMessage("Booking could not be deleted. It may have changed "
+                    + "status and is no longer eligible for deletion.");
+        }
     }
 
     // ====================================
@@ -485,6 +659,8 @@ table.setColumnResizePolicy(
 
     private void showAddEquipmentWindow() {
         Stage stage = new Stage();
+        stage.initOwner(primaryStage);
+        stage.initModality(Modality.WINDOW_MODAL);
         Label heading = new Label("Add New Equipment");
         heading.setStyle("-fx-font-size: 20px; -fx-font-weight: bold;");
 
@@ -523,6 +699,8 @@ table.setColumnResizePolicy(
 
     private void showEditEquipmentWindow() {
         TextInputDialog dialog = new TextInputDialog();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.WINDOW_MODAL);
         dialog.setTitle("Edit Equipment"); dialog.setHeaderText("Enter Equipment ID"); dialog.setContentText("Equipment ID:");
         var result = dialog.showAndWait();
         if (result.isEmpty()) return;
@@ -540,6 +718,8 @@ table.setColumnResizePolicy(
 
     private void showEditEquipmentForm(Equipment equipmentData) {
         Stage stage = new Stage();
+        stage.initOwner(primaryStage);
+        stage.initModality(Modality.WINDOW_MODAL);
         Label heading = new Label("Edit Equipment");
         heading.setStyle("-fx-font-size: 20px; -fx-font-weight: bold;");
         TextField nameField = new TextField(equipmentData.getEquipmentName());
@@ -576,6 +756,8 @@ table.setColumnResizePolicy(
 
     private void showDeleteEquipmentWindow() {
         TextInputDialog dialog = new TextInputDialog();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.WINDOW_MODAL);
         dialog.setTitle("Delete Equipment"); dialog.setHeaderText("Delete Campus Equipment"); dialog.setContentText("Enter Equipment ID:");
         var result = dialog.showAndWait();
         if (result.isEmpty()) return;
@@ -608,10 +790,7 @@ table.setColumnResizePolicy(
     // ====================================
 
     private void showEventManagement() {
-        showManagementPage("Manage Events", "Create, update and review campus events.",
-                new String[]{"Add Event", "Edit Event", "Delete Event", "View Events"},
-                new Runnable[]{this::showAddEventWindow, this::showEditEventWindow,
-                        this::showDeleteEventWindow, this::showEvents});
+        showEvents();
     }
 
     // ====================================
@@ -619,739 +798,226 @@ table.setColumnResizePolicy(
     // ====================================
 
     private void showEvents() {
+        EventDAO eventDAO = new EventDAO();
+        TableView<Event> table = new TableView<>();
+        table.setColumnResizePolicy(
+                TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        table.getColumns().add(eventColumn(
+                "Event ID", "eventId", 75));
+        table.getColumns().add(eventColumn(
+                "Event Name", "eventName", 150));
+        table.getColumns().add(eventColumn(
+                "Description", "description", 220));
 
-        EventDAO eventDAO =
-                new EventDAO();
+        TableColumn<Event, LocalDate> dateColumn =
+                new TableColumn<>("Event Date");
+        dateColumn.setCellValueFactory(
+                new PropertyValueFactory<>("eventDate"));
+        dateColumn.setCellFactory(column -> new TableCell<>() {
+            private final DateTimeFormatter formatter =
+                    DateTimeFormatter.ofPattern("dd MMM yyyy");
 
-        var events =
-                eventDAO.getAllEvents();
+            @Override
+            protected void updateItem(LocalDate date, boolean empty) {
+                super.updateItem(date, empty);
+                setText(empty || date == null ? null : date.format(formatter));
+            }
+        });
+        table.getColumns().add(dateColumn);
 
-        StringBuilder data =
-                new StringBuilder();
+        table.getColumns().add(timeEventColumn("Start Time", true));
+        table.getColumns().add(timeEventColumn("End Time", false));
+        table.getColumns().add(eventColumn(
+                "Organizer (User ID)", "organizerId", 120));
 
-        if (events.isEmpty()) {
+        ObservableList<Event> tableData =
+                FXCollections.observableArrayList();
+        table.setItems(tableData);
+        Runnable refresh = () ->
+                tableData.setAll(eventDAO.getAllEvents());
 
-            data.append(
-                    "No events found."
-            );
+        Button refreshButton = new Button("Refresh");
+        refreshButton.setOnAction(event -> refresh.run());
+        Button addButton = new Button("Create Event");
+        addButton.setOnAction(event -> showEventForm(null, refresh));
+        Button editButton = new Button("Edit Selected");
+        editButton.setOnAction(event ->
+                showEventForm(table.getSelectionModel().getSelectedItem(), refresh));
+        Button deleteButton = new Button("Delete Selected");
+        deleteButton.setOnAction(event ->
+                deleteSelectedEvent(
+                        table.getSelectionModel().getSelectedItem(), refresh));
+        Button backButton = new Button("Back to Dashboard");
+        backButton.setOnAction(event -> showAdminHome(currentUser));
 
+        Label heading = new Label("Campus Events");
+        heading.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
+        HBox actions = new HBox(
+                10, addButton, editButton, deleteButton, refreshButton, backButton);
+        actions.setAlignment(Pos.CENTER_LEFT);
+        VBox page = new VBox(14, heading, table, actions);
+        page.setPadding(new Insets(8));
+        VBox.setVgrow(table, Priority.ALWAYS);
+        table.setMinHeight(300);
+        contentArea.getChildren().setAll(page);
+        table.setRowFactory(view -> {
+            var row = new javafx.scene.control.TableRow<Event>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    showEventForm(row.getItem(), refresh);
+                }
+            });
+            return row;
+        });
+        refresh.run();
+    }
+
+    private TableColumn<Event, ?> eventColumn(
+            String title, String property, double width) {
+        TableColumn<Event, Object> column = new TableColumn<>(title);
+        column.setCellValueFactory(new PropertyValueFactory<>(property));
+        column.setPrefWidth(width);
+        return column;
+    }
+
+    private TableColumn<Event, LocalTime> timeEventColumn(
+            String title, boolean startTime) {
+        TableColumn<Event, LocalTime> column = new TableColumn<>(title);
+        column.setCellValueFactory(new PropertyValueFactory<>(
+                startTime ? "startTime" : "endTime"));
+        column.setCellFactory(ignored -> new TableCell<>() {
+            private final DateTimeFormatter formatter =
+                    DateTimeFormatter.ofPattern("HH:mm");
+
+            @Override
+            protected void updateItem(LocalTime time, boolean empty) {
+                super.updateItem(time, empty);
+                setText(empty || time == null ? null : time.format(formatter));
+            }
+        });
+        return column;
+    }
+
+    private void showEventForm(Event selected, Runnable refresh) {
+        boolean editing = selected != null;
+        TextField name = new TextField(editing ? selected.getEventName() : "");
+        TextField description = new TextField(
+                editing && selected.getDescription() != null
+                        ? selected.getDescription() : "");
+        DatePicker date = new DatePicker(
+                editing ? selected.getEventDate() : null);
+        TextField start = new TextField(
+                editing ? selected.getStartTime().toString() : "");
+        start.setPromptText("HH:mm");
+        TextField end = new TextField(
+                editing ? selected.getEndTime().toString() : "");
+        end.setPromptText("HH:mm");
+        TextField organizer = new TextField(
+                editing ? String.valueOf(selected.getOrganizerId())
+                        : String.valueOf(currentUser.getUserId()));
+        GridPane fields = new GridPane();
+        fields.setHgap(12);
+        fields.setVgap(12);
+        fields.addRow(0, new Label("Event name"), name);
+        fields.addRow(1, new Label("Description"), description);
+        fields.addRow(2, new Label("Event date"), date);
+        fields.addRow(3, new Label("Start time (HH:mm)"), start);
+        fields.addRow(4, new Label("End time (HH:mm)"), end);
+        fields.addRow(5, new Label("Organizer user ID"), organizer);
+        GridPane.setHgrow(name, Priority.ALWAYS);
+        GridPane.setHgrow(description, Priority.ALWAYS);
+        GridPane.setHgrow(date, Priority.ALWAYS);
+        GridPane.setHgrow(start, Priority.ALWAYS);
+        GridPane.setHgrow(end, Priority.ALWAYS);
+        GridPane.setHgrow(organizer, Priority.ALWAYS);
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.WINDOW_MODAL);
+        dialog.setTitle(editing ? "Edit Event" : "Create Event");
+        dialog.setHeaderText(editing
+                ? "Update the selected event"
+                : "Enter the event details");
+        dialog.getDialogPane().setContent(fields);
+        dialog.getDialogPane().getButtonTypes().addAll(
+                ButtonType.OK, ButtonType.CANCEL);
+        if (dialog.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+
+        try {
+            String eventName = name.getText() == null
+                    ? "" : name.getText().trim();
+            String eventDescription = description.getText() == null
+                    ? "" : description.getText().trim();
+            LocalDate eventDate = date.getValue();
+            LocalTime startTime = LocalTime.parse(start.getText().trim());
+            LocalTime endTime = LocalTime.parse(end.getText().trim());
+            int organizerId = Integer.parseInt(organizer.getText().trim());
+            if (eventName.isEmpty() || eventDate == null || organizerId <= 0) {
+                showMessage("Event name, date, and a valid organizer ID are required.");
+                return;
+            }
+            if (eventName.length() > 150 || eventDescription.length() > 500) {
+                showMessage("Event name must be at most 150 characters and "
+                        + "description at most 500 characters.");
+                return;
+            }
+            if (!endTime.isAfter(startTime)) {
+                showMessage("End time must be later than start time.");
+                return;
+            }
+
+            Event event = new Event(
+                    editing ? selected.getEventId() : 0,
+                    eventName,
+                    eventDescription,
+                    eventDate,
+                    startTime,
+                    endTime,
+                    organizerId);
+            boolean success = editing
+                    ? new EventDAO().updateEvent(event)
+                    : new EventDAO().addEvent(event);
+            if (success) {
+                showMessage(editing
+                        ? "Event updated successfully."
+                        : "Event created successfully.");
+                refresh.run();
+            } else {
+                showMessage(editing
+                        ? "Event could not be updated. A booking-linked event "
+                                + "cannot have its date or time changed here."
+                        : "Event could not be created. Check the organizer ID and database.");
+            }
+        } catch (DateTimeParseException e) {
+            showMessage("Enter event times in 24-hour HH:mm format.");
+        } catch (NumberFormatException e) {
+            showMessage("Organizer ID must be a valid positive number.");
+        }
+    }
+
+    private void deleteSelectedEvent(Event selected, Runnable refresh) {
+        if (selected == null) {
+            showMessage("Select an event before deleting.");
+            return;
+        }
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.initOwner(primaryStage);
+        confirmation.initModality(Modality.WINDOW_MODAL);
+        confirmation.setTitle("Delete Event");
+        confirmation.setHeaderText(
+                "Delete event #" + selected.getEventId() + "?");
+        confirmation.setContentText(
+                "Events linked to bookings cannot be deleted.");
+        if (confirmation.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+        if (new EventDAO().deleteEvent(selected.getEventId())) {
+            showMessage("Event deleted successfully.");
+            refresh.run();
         } else {
-
-            // IMPORTANT:
-            // Use eventItem instead of event
-            // to avoid conflict with JavaFX
-            // event/action variables.
-
-            for (var eventItem : events) {
-
-                data.append("Event ID: ")
-                    .append(
-                            eventItem.getEventId()
-                    )
-                    .append("\n")
-
-                    .append("Event Name: ")
-                    .append(
-                            eventItem.getEventName()
-                    )
-                    .append("\n")
-
-                    .append("Description: ")
-                    .append(
-                            eventItem.getDescription()
-                    )
-                    .append("\n")
-
-                    .append("Date: ")
-                    .append(
-                            eventItem.getEventDate()
-                    )
-                    .append("\n")
-
-                    .append("Time: ")
-                    .append(
-                            eventItem.getStartTime()
-                    )
-                    .append(" - ")
-                    .append(
-                            eventItem.getEndTime()
-                    )
-                    .append("\n")
-
-                    .append("Organizer ID: ")
-                    .append(
-                            eventItem.getOrganizerId()
-                    )
-                    .append("\n\n");
-            }
-        }
-
-        Alert alert =
-                new Alert(
-                        Alert.AlertType.INFORMATION
-                );
-
-        alert.setTitle(
-                "Campus Events"
-        );
-
-        alert.setHeaderText(
-                "All Events"
-        );
-
-        alert.setContentText(
-                data.toString()
-        );
-
-        alert.showAndWait();
-    }
-
-    // ====================================
-    // ADD EVENT
-    // ====================================
-
-    private void showAddEventWindow() {
-
-        Stage eventStage =
-                new Stage();
-
-        Label heading =
-                new Label(
-                        "Add New Event"
-                );
-
-        heading.setStyle(
-                "-fx-font-size: 20px;" +
-                "-fx-font-weight: bold;"
-        );
-
-        TextField nameField =
-                new TextField();
-
-        nameField.setPromptText(
-                "Event Name"
-        );
-
-        TextField descriptionField =
-                new TextField();
-
-        descriptionField.setPromptText(
-                "Description"
-        );
-
-        DatePicker datePicker =
-                new DatePicker();
-
-        TextField startTimeField =
-                new TextField();
-
-        startTimeField.setPromptText(
-                "Start Time (HH:MM)"
-        );
-
-        TextField endTimeField =
-                new TextField();
-
-        endTimeField.setPromptText(
-                "End Time (HH:MM)"
-        );
-
-        TextField organizerField =
-                new TextField();
-
-        organizerField.setPromptText(
-                "Organizer User ID"
-        );
-
-        Button addButton =
-                new Button(
-                        "Add Event"
-                );
-
-        Label message =
-                new Label();
-
-        addButton.setOnAction(action -> {
-
-            try {
-
-                String name =
-                        nameField.getText().trim();
-
-                String description =
-                        descriptionField
-                                .getText()
-                                .trim();
-
-                LocalDate date =
-                        datePicker.getValue();
-
-                LocalTime startTime =
-                        LocalTime.parse(
-                                startTimeField
-                                        .getText()
-                                        .trim()
-                        );
-
-                LocalTime endTime =
-                        LocalTime.parse(
-                                endTimeField
-                                        .getText()
-                                        .trim()
-                        );
-
-                int organizerId =
-                        Integer.parseInt(
-                                organizerField
-                                        .getText()
-                                        .trim()
-                        );
-
-                if (name.isEmpty()
-                        || description.isEmpty()
-                        || date == null) {
-
-                    message.setText(
-                            "Please fill all fields."
-                    );
-
-                    return;
-                }
-
-                if (!endTime.isAfter(
-                        startTime
-                )) {
-
-                    message.setText(
-                            "End time must be after start time."
-                    );
-
-                    return;
-                }
-
-                if (organizerId <= 0) {
-
-                    message.setText(
-                            "Enter a valid Organizer ID."
-                    );
-
-                    return;
-                }
-
-                Event newEvent =
-                        new Event(
-                                0,
-                                name,
-                                description,
-                                date,
-                                startTime,
-                                endTime,
-                                organizerId
-                        );
-
-                EventDAO eventDAO =
-                        new EventDAO();
-
-                boolean success =
-                        eventDAO.addEvent(
-                                newEvent
-                        );
-
-                if (success) {
-
-                    message.setText(
-                            "Event added successfully!"
-                    );
-
-                    nameField.clear();
-                    descriptionField.clear();
-                    datePicker.setValue(null);
-                    startTimeField.clear();
-                    endTimeField.clear();
-                    organizerField.clear();
-
-                } else {
-
-                    message.setText(
-                            "Failed to add event."
-                    );
-                }
-
-            } catch (
-                    Exception e
-            ) {
-
-                message.setText(
-                        "Please enter valid event details."
-                );
-            }
-        });
-
-        VBox root =
-                new VBox(
-                        15,
-                        heading,
-                        nameField,
-                        descriptionField,
-                        new Label("Event Date"),
-                        datePicker,
-                        startTimeField,
-                        endTimeField,
-                        organizerField,
-                        addButton,
-                        message
-                );
-
-        root.setAlignment(
-                Pos.CENTER
-        );
-
-        root.setPadding(
-                new Insets(30)
-        );
-
-        Scene scene =
-                new Scene(
-                        root,
-                        500,
-                        600
-                );
-
-        eventStage.setTitle(
-                "Add Event"
-        );
-
-        eventStage.setScene(
-                scene
-        );
-
-        eventStage.show();
-    }
-
-    // ====================================
-    // EDIT EVENT
-    // ====================================
-
-    private void showEditEventWindow() {
-
-        TextInputDialog dialog =
-                new TextInputDialog();
-
-        dialog.setTitle(
-                "Edit Event"
-        );
-
-        dialog.setHeaderText(
-                "Enter Event ID"
-        );
-
-        dialog.setContentText(
-                "Event ID:"
-        );
-
-        var result =
-                dialog.showAndWait();
-
-        if (result.isEmpty()) {
-            return;
-        }
-
-        try {
-
-            int eventId =
-                    Integer.parseInt(
-                            result.get().trim()
-                    );
-
-            EventDAO eventDAO =
-                    new EventDAO();
-
-            Event selectedEvent =
-                    null;
-
-            var events =
-                    eventDAO.getAllEvents();
-
-            for (var eventItem : events) {
-
-                if (
-                        eventItem.getEventId()
-                                == eventId
-                ) {
-
-                    selectedEvent =
-                            eventItem;
-
-                    break;
-                }
-            }
-
-            if (selectedEvent == null) {
-
-                showMessage(
-                        "Event ID not found."
-                );
-
-                return;
-            }
-
-            showEditEventForm(
-                    selectedEvent
-            );
-
-        } catch (
-                NumberFormatException e
-        ) {
-
-            showMessage(
-                    "Please enter a valid Event ID."
-            );
-        }
-    }
-
-    // ====================================
-    // EDIT EVENT FORM
-    // ====================================
-
-    private void showEditEventForm(
-            Event eventData
-    ) {
-
-        Stage editStage =
-                new Stage();
-
-        Label heading =
-                new Label(
-                        "Edit Event"
-                );
-
-        heading.setStyle(
-                "-fx-font-size: 20px;" +
-                "-fx-font-weight: bold;"
-        );
-
-        TextField nameField =
-                new TextField(
-                        eventData.getEventName()
-                );
-
-        TextField descriptionField =
-                new TextField(
-                        eventData.getDescription()
-                );
-
-        DatePicker datePicker =
-                new DatePicker(
-                        eventData.getEventDate()
-                );
-
-        TextField startTimeField =
-                new TextField(
-                        eventData.getStartTime()
-                                .toString()
-                );
-
-        TextField endTimeField =
-                new TextField(
-                        eventData.getEndTime()
-                                .toString()
-                );
-
-        TextField organizerField =
-                new TextField(
-                        String.valueOf(
-                                eventData.getOrganizerId()
-                        )
-                );
-
-        Button updateButton =
-                new Button(
-                        "Update Event"
-                );
-
-        Label message =
-                new Label();
-
-        updateButton.setOnAction(action -> {
-
-            try {
-
-                String name =
-                        nameField.getText().trim();
-
-                String description =
-                        descriptionField
-                                .getText()
-                                .trim();
-
-                LocalDate date =
-                        datePicker.getValue();
-
-                LocalTime startTime =
-                        LocalTime.parse(
-                                startTimeField
-                                        .getText()
-                                        .trim()
-                        );
-
-                LocalTime endTime =
-                        LocalTime.parse(
-                                endTimeField
-                                        .getText()
-                                        .trim()
-                        );
-
-                int organizerId =
-                        Integer.parseInt(
-                                organizerField
-                                        .getText()
-                                        .trim()
-                        );
-
-                if (name.isEmpty()
-                        || description.isEmpty()
-                        || date == null) {
-
-                    message.setText(
-                            "Please fill all fields."
-                    );
-
-                    return;
-                }
-
-                if (!endTime.isAfter(
-                        startTime
-                )) {
-
-                    message.setText(
-                            "End time must be after start time."
-                    );
-
-                    return;
-                }
-
-                if (organizerId <= 0) {
-
-                    message.setText(
-                            "Enter a valid Organizer ID."
-                    );
-
-                    return;
-                }
-
-                eventData.setEventName(
-                        name
-                );
-
-                eventData.setDescription(
-                        description
-                );
-
-                eventData.setEventDate(
-                        date
-                );
-
-                eventData.setStartTime(
-                        startTime
-                );
-
-                eventData.setEndTime(
-                        endTime
-                );
-
-                eventData.setOrganizerId(
-                        organizerId
-                );
-
-                EventDAO eventDAO =
-                        new EventDAO();
-
-                boolean success =
-                        eventDAO.updateEvent(
-                                eventData
-                        );
-
-                if (success) {
-
-                    message.setText(
-                            "Event updated successfully!"
-                    );
-
-                } else {
-
-                    message.setText(
-                            "Failed to update event."
-                    );
-                }
-
-            } catch (
-                    Exception e
-            ) {
-
-                message.setText(
-                        "Please enter valid event details."
-                );
-            }
-        });
-
-        VBox root =
-                new VBox(
-                        15,
-                        heading,
-                        nameField,
-                        descriptionField,
-                        new Label("Event Date"),
-                        datePicker,
-                        startTimeField,
-                        endTimeField,
-                        organizerField,
-                        updateButton,
-                        message
-                );
-
-        root.setAlignment(
-                Pos.CENTER
-        );
-
-        root.setPadding(
-                new Insets(30)
-        );
-
-        Scene scene =
-                new Scene(
-                        root,
-                        500,
-                        600
-                );
-
-        editStage.setTitle(
-                "Edit Event"
-        );
-
-        editStage.setScene(
-                scene
-        );
-
-        editStage.show();
-    }
-
-    // ====================================
-    // DELETE EVENT
-    // ====================================
-
-    private void showDeleteEventWindow() {
-
-        TextInputDialog dialog =
-                new TextInputDialog();
-
-        dialog.setTitle(
-                "Delete Event"
-        );
-
-        dialog.setHeaderText(
-                "Delete Campus Event"
-        );
-
-        dialog.setContentText(
-                "Enter Event ID:"
-        );
-
-        var result =
-                dialog.showAndWait();
-
-        if (result.isEmpty()) {
-            return;
-        }
-
-        try {
-
-            int eventId =
-                    Integer.parseInt(
-                            result.get().trim()
-                    );
-
-            EventDAO eventDAO =
-                    new EventDAO();
-
-            boolean exists = false;
-
-            var events =
-                    eventDAO.getAllEvents();
-
-            for (var eventItem : events) {
-
-                if (
-                        eventItem.getEventId()
-                                == eventId
-                ) {
-
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists) {
-
-                showMessage(
-                        "Event ID not found."
-                );
-
-                return;
-            }
-
-            Alert confirmation =
-                    new Alert(
-                            Alert.AlertType.CONFIRMATION
-                    );
-
-            confirmation.setTitle(
-                    "Confirm Delete"
-            );
-
-            confirmation.setHeaderText(
-                    "Delete Event " + eventId + "?"
-            );
-
-            confirmation.setContentText(
-                    "This action cannot be undone."
-            );
-
-            var confirmResult =
-                    confirmation.showAndWait();
-
-            if (
-                    confirmResult.isPresent()
-                    &&
-                    confirmResult.get()
-                            == ButtonType.OK
-            ) {
-
-                boolean success =
-                        eventDAO.deleteEvent(
-                                eventId
-                        );
-
-                if (success) {
-
-                    showMessage(
-                            "Event deleted successfully!"
-                    );
-
-                } else {
-
-                    showMessage(
-                            "Failed to delete event."
-                    );
-                }
-            }
-
-        } catch (
-                NumberFormatException e
-        ) {
-
-            showMessage(
-                    "Please enter a valid Event ID."
-            );
+            showMessage("Event could not be deleted. It may be linked to a booking.");
         }
     }
 
@@ -1360,686 +1026,191 @@ table.setColumnResizePolicy(
     // ====================================
 
     private void showResources() {
+        ResourceDAO resourceDAO = new ResourceDAO();
+        TableView<Resource> table = new TableView<>();
+        table.setColumnResizePolicy(
+                TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        addResourceColumn(table, "Resource ID", "resourceId", 85);
+        addResourceColumn(table, "Name", "resourceName", 160);
+        addResourceColumn(table, "Type", "resourceType", 130);
+        addResourceColumn(table, "Location", "location", 150);
+        addResourceColumn(table, "Capacity", "capacity", 90);
+        addResourceColumn(table, "Availability", "availabilityStatus", 120);
 
-        ResourceDAO resourceDAO =
-                new ResourceDAO();
+        ObservableList<Resource> tableData =
+                FXCollections.observableArrayList();
+        table.setItems(tableData);
+        Runnable refresh = () ->
+                tableData.setAll(resourceDAO.getAllResources());
 
-        var resources =
-                resourceDAO.getAllResources();
+        Button addButton = new Button("Add Resource");
+        addButton.setOnAction(event -> showResourceForm(null, refresh));
+        Button editButton = new Button("Edit Selected");
+        editButton.setOnAction(event ->
+                showResourceForm(
+                        table.getSelectionModel().getSelectedItem(), refresh));
+        Button deleteButton = new Button("Delete Selected");
+        deleteButton.setOnAction(event ->
+                deleteSelectedResource(
+                        table.getSelectionModel().getSelectedItem(), refresh));
+        Button refreshButton = new Button("Refresh");
+        refreshButton.setOnAction(event -> refresh.run());
+        Button backButton = new Button("Back to Dashboard");
+        backButton.setOnAction(event -> showAdminHome(currentUser));
 
-        StringBuilder data =
-                new StringBuilder();
+        Label heading = new Label("Campus Resources");
+        heading.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
+        HBox actions = new HBox(
+                10, addButton, editButton, deleteButton, refreshButton, backButton);
+        actions.setAlignment(Pos.CENTER_LEFT);
+        VBox page = new VBox(14, heading, table, actions);
+        page.setPadding(new Insets(8));
+        VBox.setVgrow(table, Priority.ALWAYS);
+        table.setMinHeight(300);
+        contentArea.getChildren().setAll(page);
+        table.setRowFactory(view -> {
+            var row = new javafx.scene.control.TableRow<Resource>();
+            row.setOnMouseClicked(event -> {
+                if (event.getClickCount() == 2 && !row.isEmpty()) {
+                    showResourceForm(row.getItem(), refresh);
+                }
+            });
+            return row;
+        });
+        refresh.run();
+    }
 
-        if (resources.isEmpty()) {
+    private void addResourceColumn(
+            TableView<Resource> table,
+            String title,
+            String property,
+            double width) {
+        TableColumn<Resource, Object> column = new TableColumn<>(title);
+        column.setCellValueFactory(new PropertyValueFactory<>(property));
+        column.setPrefWidth(width);
+        table.getColumns().add(column);
+    }
 
-            data.append(
-                    "No resources found."
-            );
+    private void showResourceForm(Resource selected, Runnable refresh) {
+        boolean editing = selected != null;
+        TextField name = new TextField(
+                editing ? selected.getResourceName() : "");
+        ComboBox<String> type = new ComboBox<>();
+        type.getItems().addAll(
+                "CLASSROOM", "LAB", "SEMINAR_HALL", "SPORTS_FACILITY");
+        type.setMaxWidth(Double.MAX_VALUE);
+        if (editing) {
+            type.setValue(selected.getResourceType());
+        }
+        TextField location = new TextField(
+                editing ? selected.getLocation() : "");
+        TextField capacity = new TextField(
+                editing ? String.valueOf(selected.getCapacity()) : "");
+        ComboBox<String> status = new ComboBox<>();
+        status.getItems().addAll("AVAILABLE", "MAINTENANCE");
+        status.setMaxWidth(Double.MAX_VALUE);
+        status.setValue(editing
+                ? selected.getAvailabilityStatus() : "AVAILABLE");
 
+        GridPane fields = new GridPane();
+        fields.setHgap(12);
+        fields.setVgap(12);
+        fields.addRow(0, new Label("Resource name"), name);
+        fields.addRow(1, new Label("Resource type"), type);
+        fields.addRow(2, new Label("Location"), location);
+        fields.addRow(3, new Label("Capacity"), capacity);
+        fields.addRow(4, new Label("Availability"), status);
+        GridPane.setHgrow(name, Priority.ALWAYS);
+        GridPane.setHgrow(type, Priority.ALWAYS);
+        GridPane.setHgrow(location, Priority.ALWAYS);
+        GridPane.setHgrow(capacity, Priority.ALWAYS);
+        GridPane.setHgrow(status, Priority.ALWAYS);
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.initOwner(primaryStage);
+        dialog.initModality(Modality.WINDOW_MODAL);
+        dialog.setTitle(editing ? "Edit Resource" : "Add Resource");
+        dialog.setHeaderText(editing
+                ? "Update the selected resource"
+                : "Enter the resource details");
+        dialog.getDialogPane().setContent(fields);
+        dialog.getDialogPane().getButtonTypes().addAll(
+                ButtonType.OK, ButtonType.CANCEL);
+        if (dialog.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+
+        String resourceName = name.getText() == null
+                ? "" : name.getText().trim();
+        String resourceLocation = location.getText() == null
+                ? "" : location.getText().trim();
+        if (resourceName.isEmpty() || resourceLocation.isEmpty()
+                || type.getValue() == null || status.getValue() == null) {
+            showMessage("Name, type, location, and availability are required.");
+            return;
+        }
+        if (!isValidResourceType(type.getValue())) {
+            showMessage("Select a valid resource type.");
+            return;
+        }
+        if (resourceName.length() > 100 || resourceLocation.length() > 150) {
+            showMessage("Resource name must be at most 100 characters and "
+                    + "location at most 150 characters.");
+            return;
+        }
+        try {
+            int capacityValue = Integer.parseInt(capacity.getText().trim());
+            if (capacityValue <= 0) {
+                showMessage("Capacity must be greater than zero.");
+                return;
+            }
+            Resource resource = new Resource(
+                    editing ? selected.getResourceId() : 0,
+                    resourceName,
+                    type.getValue(),
+                    resourceLocation,
+                    capacityValue,
+                    status.getValue());
+            boolean success = editing
+                    ? new ResourceDAO().updateResource(resource)
+                    : new ResourceDAO().addResource(resource);
+            if (success) {
+                showMessage(editing
+                        ? "Resource updated successfully."
+                        : "Resource added successfully.");
+                refresh.run();
+            } else {
+                showMessage(editing
+                        ? "Resource could not be updated."
+                        : "Resource could not be added.");
+            }
+        } catch (NumberFormatException e) {
+            showMessage("Capacity must be a valid positive number.");
+        }
+    }
+
+    private void deleteSelectedResource(
+            Resource selected, Runnable refresh) {
+        if (selected == null) {
+            showMessage("Select a resource before deleting.");
+            return;
+        }
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.initOwner(primaryStage);
+        confirmation.initModality(Modality.WINDOW_MODAL);
+        confirmation.setTitle("Delete Resource");
+        confirmation.setHeaderText(
+                "Delete resource #" + selected.getResourceId() + "?");
+        confirmation.setContentText(
+                "Resources linked to bookings cannot be deleted.");
+        if (confirmation.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+            return;
+        }
+        if (new ResourceDAO().deleteResource(selected.getResourceId())) {
+            showMessage("Resource deleted successfully.");
+            refresh.run();
         } else {
-
-            for (var resource : resources) {
-
-                data.append("Resource ID: ")
-                    .append(
-                            resource.getResourceId()
-                    )
-                    .append("\n")
-
-                    .append("Name: ")
-                    .append(
-                            resource.getResourceName()
-                    )
-                    .append("\n")
-
-                    .append("Type: ")
-                    .append(
-                            resource.getResourceType()
-                    )
-                    .append("\n")
-
-                    .append("Location: ")
-                    .append(
-                            resource.getLocation()
-                    )
-                    .append("\n")
-
-                    .append("Capacity: ")
-                    .append(
-                            resource.getCapacity()
-                    )
-                    .append("\n")
-
-                    .append("Status: ")
-                    .append(
-                            resource.getAvailabilityStatus()
-                    )
-                    .append("\n\n");
-            }
-        }
-
-        Alert alert =
-                new Alert(
-                        Alert.AlertType.INFORMATION
-                );
-
-        alert.setTitle(
-                "Campus Resources"
-        );
-
-        alert.setHeaderText(
-                "All Resources"
-        );
-
-        alert.setContentText(
-                data.toString()
-        );
-
-        alert.showAndWait();
-    }
-
-    // ====================================
-    // ADD RESOURCE
-    // ====================================
-
-    private void showAddResourceWindow() {
-
-        Stage resourceStage =
-                new Stage();
-
-        Label heading =
-                new Label(
-                        "Add New Resource"
-                );
-
-        heading.setStyle(
-                "-fx-font-size: 20px;" +
-                "-fx-font-weight: bold;"
-        );
-
-        TextField nameField =
-                new TextField();
-
-        nameField.setPromptText(
-                "Resource Name"
-        );
-
-        TextField typeField =
-                new TextField();
-
-        typeField.setPromptText(
-                "CLASSROOM / LAB / SEMINAR_HALL / SPORTS_FACILITY"
-        );
-
-        TextField locationField =
-                new TextField();
-
-        locationField.setPromptText(
-                "Location"
-        );
-
-        TextField capacityField =
-                new TextField();
-
-        capacityField.setPromptText(
-                "Capacity"
-        );
-
-        Button addButton =
-                new Button(
-                        "Add Resource"
-                );
-
-        Label message =
-                new Label();
-
-        addButton.setOnAction(action -> {
-
-            try {
-
-                String name =
-                        nameField.getText().trim();
-
-                String type =
-                        typeField.getText()
-                                .trim()
-                                .toUpperCase();
-
-                String location =
-                        locationField.getText()
-                                .trim();
-
-                int capacity =
-                        Integer.parseInt(
-                                capacityField
-                                        .getText()
-                                        .trim()
-                        );
-
-                if (name.isEmpty()
-                        || type.isEmpty()
-                        || location.isEmpty()) {
-
-                    message.setText(
-                            "Please fill all fields."
-                    );
-
-                    return;
-                }
-
-                if (capacity <= 0) {
-
-                    message.setText(
-                            "Capacity must be greater than 0."
-                    );
-
-                    return;
-                }
-
-                if (!isValidResourceType(type)) {
-
-                    message.setText(
-                            "Invalid resource type."
-                    );
-
-                    return;
-                }
-
-                Resource resource =
-                        new Resource(
-                                0,
-                                name,
-                                type,
-                                location,
-                                capacity,
-                                "AVAILABLE"
-                        );
-
-                ResourceDAO resourceDAO =
-                        new ResourceDAO();
-
-                boolean success =
-                        resourceDAO.addResource(
-                                resource
-                        );
-
-                if (success) {
-
-                    message.setText(
-                            "Resource added successfully!"
-                    );
-
-                    nameField.clear();
-                    typeField.clear();
-                    locationField.clear();
-                    capacityField.clear();
-
-                } else {
-
-                    message.setText(
-                            "Failed to add resource."
-                    );
-                }
-
-            } catch (
-                    NumberFormatException e
-            ) {
-
-                message.setText(
-                        "Capacity must be a valid number."
-                );
-            }
-        });
-
-        VBox root =
-                new VBox(
-                        15,
-                        heading,
-                        nameField,
-                        typeField,
-                        locationField,
-                        capacityField,
-                        addButton,
-                        message
-                );
-
-        root.setAlignment(
-                Pos.CENTER
-        );
-
-        root.setPadding(
-                new Insets(30)
-        );
-
-        Scene scene =
-                new Scene(
-                        root,
-                        500,
-                        450
-                );
-
-        resourceStage.setTitle(
-                "Add Resource"
-        );
-
-        resourceStage.setScene(
-                scene
-        );
-
-        resourceStage.show();
-    }
-
-    // ====================================
-    // EDIT RESOURCE
-    // ====================================
-
-    private void showEditResourceWindow() {
-
-        TextInputDialog dialog =
-                new TextInputDialog();
-
-        dialog.setTitle(
-                "Edit Resource"
-        );
-
-        dialog.setHeaderText(
-                "Enter Resource ID"
-        );
-
-        dialog.setContentText(
-                "Resource ID:"
-        );
-
-        var result =
-                dialog.showAndWait();
-
-        if (result.isEmpty()) {
-            return;
-        }
-
-        try {
-
-            int resourceId =
-                    Integer.parseInt(
-                            result.get().trim()
-                    );
-
-            ResourceDAO resourceDAO =
-                    new ResourceDAO();
-
-            Resource selectedResource =
-                    null;
-
-            var resources =
-                    resourceDAO.getAllResources();
-
-            for (var resource : resources) {
-
-                if (
-                        resource.getResourceId()
-                                == resourceId
-                ) {
-
-                    selectedResource =
-                            resource;
-
-                    break;
-                }
-            }
-
-            if (selectedResource == null) {
-
-                showMessage(
-                        "Resource ID not found."
-                );
-
-                return;
-            }
-
-            showEditResourceForm(
-                    selectedResource
-            );
-
-        } catch (
-                NumberFormatException e
-        ) {
-
-            showMessage(
-                    "Please enter a valid Resource ID."
-            );
-        }
-    }
-
-    // ====================================
-    // EDIT RESOURCE FORM
-    // ====================================
-
-    private void showEditResourceForm(
-            Resource resource
-    ) {
-
-        Stage editStage =
-                new Stage();
-
-        Label heading =
-                new Label(
-                        "Edit Resource"
-                );
-
-        heading.setStyle(
-                "-fx-font-size: 20px;" +
-                "-fx-font-weight: bold;"
-        );
-
-        TextField nameField =
-                new TextField(
-                        resource.getResourceName()
-                );
-
-        TextField typeField =
-                new TextField(
-                        resource.getResourceType()
-                );
-
-        TextField locationField =
-                new TextField(
-                        resource.getLocation()
-                );
-
-        TextField capacityField =
-                new TextField(
-                        String.valueOf(
-                                resource.getCapacity()
-                        )
-                );
-
-        TextField statusField =
-                new TextField(
-                        resource.getAvailabilityStatus()
-                );
-
-        Button updateButton =
-                new Button(
-                        "Update Resource"
-                );
-
-        Label message =
-                new Label();
-
-        updateButton.setOnAction(action -> {
-
-            try {
-
-                String name =
-                        nameField.getText().trim();
-
-                String type =
-                        typeField.getText()
-                                .trim()
-                                .toUpperCase();
-
-                String location =
-                        locationField.getText().trim();
-
-                int capacity =
-                        Integer.parseInt(
-                                capacityField
-                                        .getText()
-                                        .trim()
-                        );
-
-                String status =
-                        statusField.getText()
-                                .trim()
-                                .toUpperCase();
-
-                if (name.isEmpty()
-                        || type.isEmpty()
-                        || location.isEmpty()
-                        || status.isEmpty()) {
-
-                    message.setText(
-                            "Please fill all fields."
-                    );
-
-                    return;
-                }
-
-                if (capacity <= 0) {
-
-                    message.setText(
-                            "Capacity must be greater than 0."
-                    );
-
-                    return;
-                }
-
-                if (!isValidResourceType(type)) {
-
-                    message.setText(
-                            "Invalid resource type."
-                    );
-
-                    return;
-                }
-
-                if (!status.equals("AVAILABLE")
-                        && !status.equals("MAINTENANCE")) {
-
-                    message.setText(
-                            "Status must be AVAILABLE or MAINTENANCE."
-                    );
-
-                    return;
-                }
-
-                resource.setResourceName(
-                        name
-                );
-
-                resource.setResourceType(
-                        type
-                );
-
-                resource.setLocation(
-                        location
-                );
-
-                resource.setCapacity(
-                        capacity
-                );
-
-                resource.setAvailabilityStatus(
-                        status
-                );
-
-                ResourceDAO resourceDAO =
-                        new ResourceDAO();
-
-                boolean success =
-                        resourceDAO.updateResource(
-                                resource
-                        );
-
-                if (success) {
-
-                    message.setText(
-                            "Resource updated successfully!"
-                    );
-
-                } else {
-
-                    message.setText(
-                            "Failed to update resource."
-                    );
-                }
-
-            } catch (
-                    NumberFormatException e
-            ) {
-
-                message.setText(
-                        "Capacity must be a valid number."
-                );
-            }
-        });
-
-        VBox root =
-                new VBox(
-                        15,
-                        heading,
-                        nameField,
-                        typeField,
-                        locationField,
-                        capacityField,
-                        statusField,
-                        updateButton,
-                        message
-                );
-
-        root.setAlignment(
-                Pos.CENTER
-        );
-
-        root.setPadding(
-                new Insets(30)
-        );
-
-        Scene scene =
-                new Scene(
-                        root,
-                        500,
-                        500
-                );
-
-        editStage.setTitle(
-                "Edit Resource"
-        );
-
-        editStage.setScene(
-                scene
-        );
-
-        editStage.show();
-    }
-
-    // ====================================
-    // DELETE RESOURCE
-    // ====================================
-
-    private void showDeleteResourceWindow() {
-
-        TextInputDialog dialog =
-                new TextInputDialog();
-
-        dialog.setTitle(
-                "Delete Resource"
-        );
-
-        dialog.setHeaderText(
-                "Delete Campus Resource"
-        );
-
-        dialog.setContentText(
-                "Enter Resource ID:"
-        );
-
-        var result =
-                dialog.showAndWait();
-
-        if (result.isEmpty()) {
-            return;
-        }
-
-        try {
-
-            int resourceId =
-                    Integer.parseInt(
-                            result.get().trim()
-                    );
-
-            ResourceDAO resourceDAO =
-                    new ResourceDAO();
-
-            boolean exists = false;
-
-            var resources =
-                    resourceDAO.getAllResources();
-
-            for (var resource : resources) {
-
-                if (
-                        resource.getResourceId()
-                                == resourceId
-                ) {
-
-                    exists = true;
-                    break;
-                }
-            }
-
-            if (!exists) {
-
-                showMessage(
-                        "Resource ID not found."
-                );
-
-                return;
-            }
-
-            Alert confirmation =
-                    new Alert(
-                            Alert.AlertType.CONFIRMATION
-                    );
-
-            confirmation.setTitle(
-                    "Confirm Delete"
-            );
-
-            confirmation.setHeaderText(
-                    "Delete Resource " + resourceId + "?"
-            );
-
-            confirmation.setContentText(
-                    "This action cannot be undone."
-            );
-
-            var confirmResult =
-                    confirmation.showAndWait();
-
-            if (
-                    confirmResult.isPresent()
-                    &&
-                    confirmResult.get()
-                            == ButtonType.OK
-            ) {
-
-                boolean success =
-                        resourceDAO.deleteResource(
-                                resourceId
-                        );
-
-                if (success) {
-
-                    showMessage(
-                            "Resource deleted successfully!"
-                    );
-
-                } else {
-
-                    showMessage(
-                            "Failed to delete resource."
-                    );
-                }
-            }
-
-        } catch (
-                NumberFormatException e
-        ) {
-
-            showMessage(
-                    "Please enter a valid Resource ID."
-            );
+            showMessage("Resource could not be deleted. It may be linked to a booking.");
         }
     }
 
@@ -2069,6 +1240,10 @@ table.setColumnResizePolicy(
                 new Alert(
                         Alert.AlertType.INFORMATION
                 );
+        if (primaryStage != null) {
+            alert.initOwner(primaryStage);
+            alert.initModality(Modality.WINDOW_MODAL);
+        }
 
         alert.setHeaderText(
                 null
@@ -2081,4 +1256,3 @@ table.setColumnResizePolicy(
         alert.showAndWait();
     }
 }
-
