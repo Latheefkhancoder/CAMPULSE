@@ -2,8 +2,7 @@ USE smart_campus;
 
 INSERT INTO users (name, email, password, role) VALUES
     ('Admin', 'admin@smartcampus.com', 'admin123', 'ADMIN'),
-    ('Dr. Kumar', 'kumar@smartcampus.com', '1234', 'FACULTY'),
-    ('Student User', 'student@smartcampus.com', '1234', 'STUDENT')
+    ('Latheef Khan', 'latheef@smartcampus.com', '1234', 'FACULTY')
 ON DUPLICATE KEY UPDATE
     name = VALUES(name),
     password = VALUES(password),
