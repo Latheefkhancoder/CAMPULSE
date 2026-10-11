@@ -1,0 +1,19 @@
+# IDE and local environment files
+.idea/
+.vscode/
+*.iml
+*.class
+
+# Build artifacts
+/target/
+/dist/
+
+# Local database configuration
+.env
+.env.*
+db.properties
+*.local
+
+# Operating system files
+.DS_Store
+Thumbs.db
